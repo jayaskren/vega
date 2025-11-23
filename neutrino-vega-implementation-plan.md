@@ -194,6 +194,47 @@ export function loadCSV(tablePtr, csvData, options = {}) {
   return result;
 }
 
+export function loadNtro(tablePtr, ntroBytes) {
+  const wasm = getWasm();
+
+  // Allocate WASM memory and copy .ntro bytes
+  const ptr = wasm.alloc(ntroBytes.length);
+  const memory = new Uint8Array(wasm.memory.buffer, ptr, ntroBytes.length);
+  memory.set(new Uint8Array(ntroBytes));
+
+  const result = wasm.table_load_from_bytes(tablePtr, ptr, ntroBytes.length);
+  wasm.dealloc(ptr, ntroBytes.length);
+
+  return result;
+}
+
+export function parseNtroMetadata(ntroBytes) {
+  const wasm = getWasm();
+
+  const ptr = wasm.alloc(ntroBytes.length);
+  const memory = new Uint8Array(wasm.memory.buffer, ptr, ntroBytes.length);
+  memory.set(new Uint8Array(ntroBytes));
+
+  const metadataPtr = wasm.parse_metadata(ptr, ntroBytes.length);
+  const metadata = JSON.parse(getWasmString(wasm, metadataPtr));
+
+  wasm.dealloc(ptr, ntroBytes.length);
+  return metadata;
+}
+
+export function saveToNtro(tablePtr) {
+  const wasm = getWasm();
+  const resultPtr = wasm.table_save_to_bytes(tablePtr);
+
+  // Get byte array from WASM memory
+  const length = wasm.get_bytes_length(resultPtr);
+  const dataPtr = wasm.get_bytes_ptr(resultPtr);
+  const bytes = new Uint8Array(wasm.memory.buffer, dataPtr, length).slice();
+
+  wasm.free_bytes(resultPtr);
+  return bytes;
+}
+
 export function getRowCount(tablePtr) {
   return getWasm().table_row_count(tablePtr);
 }
@@ -258,9 +299,17 @@ NeutrinoDataSource.Definition = {
   'params': [
     { 'name': 'url', 'type': 'string' },
     { 'name': 'format', 'type': 'object' },
-    { 'name': 'async', 'type': 'boolean', 'default': true }
+    { 'name': 'async', 'type': 'boolean', 'default': true },
+    { 'name': 'cache', 'type': 'boolean', 'default': true }
   ]
 };
+
+// Detect if URL points to .ntro file
+function isNtroFile(url, format) {
+  if (format && format.type === 'neutrino') return true;
+  if (url && url.endsWith('.ntro')) return true;
+  return false;
+}
 
 inherits(NeutrinoDataSource, Transform, {
   transform(_, pulse) {
@@ -278,16 +327,34 @@ inherits(NeutrinoDataSource, Transform, {
     const df = this.dataflow;
 
     try {
-      // Load raw data via Vega's loader
-      const data = await df.request(_.url, _.format);
-
       // Create Neutrino table
       this._table = bindings.createTable();
 
-      if (_.format && _.format.type === 'csv') {
-        bindings.loadCSV(this._table, data.data);
+      if (isNtroFile(_.url, _.format)) {
+        // Load native .ntro file - much faster path
+        const response = await fetch(_.url);
+        const ntroBytes = await response.arrayBuffer();
+        bindings.loadNtro(this._table, ntroBytes);
+
+        // Optionally cache for even faster subsequent loads
+        if (_.cache !== false) {
+          this._cacheNtroData(_.url, ntroBytes);
+        }
       } else {
-        bindings.loadJSON(this._table, data.data);
+        // Load CSV/JSON and convert to Neutrino format
+        const data = await df.request(_.url, _.format);
+
+        if (_.format && _.format.type === 'csv') {
+          bindings.loadCSV(this._table, data.data);
+        } else {
+          bindings.loadJSON(this._table, data.data);
+        }
+
+        // Cache as .ntro for faster subsequent loads
+        if (_.cache !== false) {
+          const ntroBytes = bindings.saveToNtro(this._table);
+          this._cacheNtroData(_.url, ntroBytes);
+        }
       }
 
       // Build column map
@@ -315,6 +382,30 @@ inherits(NeutrinoDataSource, Transform, {
     }
 
     return pulse;
+  },
+
+  async _cacheNtroData(url, ntroBytes) {
+    // Cache to IndexedDB for instant reload
+    try {
+      const store = await getIndexedDBStore();
+      await store.save(url, url, ntroBytes);
+    } catch (e) {
+      // Caching is optional, don't fail on error
+      console.warn('Failed to cache Neutrino data:', e);
+    }
+  },
+
+  async _loadFromCache(url) {
+    try {
+      const store = await getIndexedDBStore();
+      const cached = await store.findByUrl(url);
+      if (cached) {
+        return cached.data;
+      }
+    } catch (e) {
+      // Cache miss is not an error
+    }
+    return null;
   },
 
   // Column access for transforms
@@ -1122,6 +1213,68 @@ describe('NeutrinoDataSource', () => {
     assert.equal(tuple.value, 100);
   });
 
+  it('should load .ntro files directly', async () => {
+    const source = df.add(NeutrinoDataSource, {
+      url: 'test/data/sample.ntro',
+      format: { type: 'neutrino' }
+    });
+
+    await df.runAsync();
+
+    assert.equal(source.value.length, 1000);
+    assert.equal(source.value[0].name, 'Alice');
+  });
+
+  it('should auto-detect .ntro from extension', async () => {
+    const source = df.add(NeutrinoDataSource, {
+      url: 'test/data/sample.ntro'
+      // No format specified - should detect from extension
+    });
+
+    await df.runAsync();
+
+    assert.equal(source.value.length, 1000);
+  });
+
+  it('should load .ntro faster than CSV', async () => {
+    const csvStart = performance.now();
+    const csvSource = df.add(NeutrinoDataSource, {
+      url: 'test/data/large.csv',
+      format: { type: 'csv' }
+    });
+    await df.runAsync();
+    const csvTime = performance.now() - csvStart;
+
+    df.clear();
+
+    const ntroStart = performance.now();
+    const ntroSource = df.add(NeutrinoDataSource, {
+      url: 'test/data/large.ntro',
+      format: { type: 'neutrino' }
+    });
+    await df.runAsync();
+    const ntroTime = performance.now() - ntroStart;
+
+    // .ntro should be at least 5x faster
+    assert(ntroTime < csvTime / 5, `.ntro (${ntroTime}ms) should be 5x faster than CSV (${csvTime}ms)`);
+  });
+
+  it('should cache CSV as .ntro in IndexedDB', async () => {
+    const source = df.add(NeutrinoDataSource, {
+      url: 'test/data/sample.csv',
+      format: { type: 'csv' },
+      cache: true
+    });
+
+    await df.runAsync();
+
+    // Verify cache was created
+    const store = await getIndexedDBStore();
+    const cached = await store.findByUrl('test/data/sample.csv');
+    assert(cached, 'Data should be cached in IndexedDB');
+    assert(cached.data instanceof ArrayBuffer, 'Cached data should be ArrayBuffer');
+  });
+
   // ... more tests
 });
 
@@ -1193,6 +1346,7 @@ npm install vega-neutrino
 import * as vega from 'vega';
 import { enableNeutrino } from 'vega-neutrino';
 
+// Option 1: Load CSV with Neutrino acceleration
 const spec = {
   data: [{
     name: 'large_data',
@@ -1203,9 +1357,39 @@ const spec = {
   // ... rest of spec
 };
 
+// Option 2: Load native .ntro file (10-50x faster)
+const specFast = {
+  data: [{
+    name: 'large_data',
+    url: 'data/million-rows.ntro',
+    format: { type: 'neutrino' }
+  }],
+  // ... rest of spec
+};
+
 const view = new vega.View(vega.parse(spec));
 await enableNeutrino(view);
 view.initialize('#container').run();
+```
+
+## Converting CSV to .ntro
+
+For production use, pre-convert your CSV files to .ntro format:
+
+```javascript
+import { convertToNtro } from 'vega-neutrino';
+
+// Node.js conversion script
+const ntroBytes = await convertToNtro('data/large.csv');
+fs.writeFileSync('data/large.ntro', Buffer.from(ntroBytes));
+
+// Or in browser, export after loading
+const view = new vega.View(vega.parse(spec));
+await enableNeutrino(view);
+await view.runAsync();
+
+const ntroBytes = view.data('large_data').exportNtro();
+// Save to IndexedDB or download
 ```
 
 ## API Reference
@@ -1234,6 +1418,26 @@ Add `neutrino: true` to any data source:
 }
 ```
 
+Or load native .ntro files directly:
+
+```json
+{
+  "data": [{
+    "name": "mydata",
+    "url": "data.ntro",
+    "format": {"type": "neutrino"}
+  }]
+}
+```
+
+### Format Types
+
+| Format | Description | Use Case |
+|--------|-------------|----------|
+| `csv` + `neutrino: true` | Parse CSV into Neutrino | Development, small datasets |
+| `json` + `neutrino: true` | Parse JSON into Neutrino | API responses |
+| `neutrino` | Load .ntro directly | Production, large datasets |
+
 ## Browser Support
 
 - Chrome 80+
@@ -1243,11 +1447,22 @@ Add `neutrino: true` to any data source:
 
 ## Performance
 
+### Aggregation Performance
+
 | Dataset Size | Standard Vega | With Neutrino | Improvement |
 |-------------|---------------|---------------|-------------|
 | 100K rows   | 200ms         | 40ms          | 5x          |
 | 1M rows     | 2000ms        | 200ms         | 10x         |
 | 10M rows    | OOM           | 2000ms        | ∞           |
+
+### Load Time (1M rows)
+
+| Format | Load Time | File Size | Notes |
+|--------|-----------|-----------|-------|
+| CSV (standard) | 5-10s | 100MB | Parse + object creation |
+| CSV (Neutrino) | 1-2s | 100MB | Parse + compression |
+| .ntro | 100-200ms | 5-15MB | Direct load |
+| .ntro (cached) | 50-100ms | 5-15MB | From IndexedDB |
 
 ## License
 
@@ -1259,7 +1474,8 @@ BSD-3-Clause
 ### Milestone 1: MVP (Week 4)
 - [ ] Package structure complete
 - [ ] WASM loading working
-- [ ] NeutrinoDataSource loading CSV
+- [ ] NeutrinoDataSource loading CSV and .ntro files
+- [ ] Auto-detection of .ntro format from extension
 - [ ] NeutrinoAggregate for basic operations
 - [ ] Basic tests passing
 
@@ -1270,8 +1486,10 @@ BSD-3-Clause
 - [ ] Benchmark suite created
 
 ### Milestone 3: Production Ready (Week 9)
-- [ ] IndexedDB persistence
-- [ ] Streaming load
+- [ ] IndexedDB persistence and caching
+- [ ] Automatic caching of CSV as .ntro
+- [ ] Streaming load for large CSV files
+- [ ] Export to .ntro format
 - [ ] Performance optimizations
 - [ ] Memory leak testing
 
@@ -1295,5 +1513,6 @@ BSD-3-Clause
 1. **GPU Acceleration**: WebGPU for even faster aggregations
 2. **Streaming Sources**: WebSocket and Server-Sent Events
 3. **Custom Aggregations**: User-defined aggregation functions
-4. **Direct .ntro Support**: Load pre-compressed files in specs
-5. **Server-Side Rendering**: Node.js support with native Neutrino
+4. **Server-Side Rendering**: Node.js support with native Neutrino
+5. **CLI Tools**: Command-line utilities for CSV to .ntro conversion
+6. **Lazy Column Loading**: Load only columns referenced in spec

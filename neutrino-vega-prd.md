@@ -59,6 +59,22 @@ Users opt into Neutrino via a data source property:
 }
 ```
 
+Or load native .ntro files for maximum performance:
+
+```json
+{
+  "data": [
+    {
+      "name": "large_dataset",
+      "url": "data.ntro",
+      "format": {"type": "neutrino"}
+    }
+  ]
+}
+```
+
+The .ntro format provides 10-50x faster loading since data is already compressed and typed.
+
 Or programmatically:
 
 ```javascript
@@ -80,14 +96,20 @@ enableNeutrino(view, {
 **FR-1.1**: Load data from CSV/JSON into Neutrino columnar format
 - Support CSV with automatic type detection
 - Support JSON arrays of objects
-- Support pre-compressed .ntro files
 
-**FR-1.2**: Transparent tuple access for Vega operators
+**FR-1.2**: Native .ntro file loading
+- Load pre-compressed .ntro files directly in Vega specs
+- Auto-detect .ntro format from file extension or explicit format type
+- Skip parsing/compression overhead for instant loading
+- Support metadata inspection before full load
+- Target: 10-50x faster load times vs CSV for same data
+
+**FR-1.3**: Transparent tuple access for Vega operators
 - Provide Vega-compatible tuple interface
 - Support field accessors and expressions
 - Track tuple identity for incremental updates
 
-**FR-1.3**: Memory-efficient storage
+**FR-1.4**: Memory-efficient storage
 - Target: 3-5x memory reduction vs current Vega storage
 - Support datasets up to 100 million rows in browser
 
@@ -153,7 +175,8 @@ enableNeutrino(view, {
 
 - **Aggregation**: 5-10x faster than current Vega for datasets >100K rows
 - **Memory**: 3-5x reduction in memory usage
-- **Load time**: <2 seconds for 1M row CSV (after initial WASM load)
+- **CSV load time**: <2 seconds for 1M row CSV (after initial WASM load)
+- **.ntro load time**: <200ms for 1M row .ntro file (10-50x faster than CSV)
 - **UI responsiveness**: Heavy operations must not block UI >16ms
 
 ### NFR-2: Compatibility
@@ -232,6 +255,25 @@ enableNeutrino(view, {
 - Graceful degradation on low-memory devices
 - Fast subsequent loads from cached data
 
+### US-5: Data Publisher
+
+> As a data publisher, I want to distribute pre-compressed .ntro files so that users can load large datasets instantly without waiting for CSV parsing.
+
+**Acceptance Criteria**:
+- Export processed data as .ntro files
+- Load .ntro files 10-50x faster than equivalent CSV
+- Preserve column types and metadata in .ntro format
+- Support both local and CDN-hosted .ntro files
+
+### US-6: Returning User
+
+> As a returning user, I want my previously loaded datasets to load instantly so that I don't have to wait for re-parsing every session.
+
+**Acceptance Criteria**:
+- Automatic caching of loaded data as .ntro in IndexedDB
+- Sub-second reload from cache
+- Cache invalidation when source data changes
+
 ## Success Metrics
 
 ### Primary Metrics
@@ -276,7 +318,6 @@ The following are explicitly out of scope for the initial release:
 2. **GPU acceleration** (WebGL/WebGPU compute)
 3. **Distributed processing** (multi-machine)
 4. **Custom aggregation functions** (only built-in ops supported)
-5. **Direct .ntro file format in Vega specs** (must load via JS API)
 
 ## Dependencies
 
@@ -329,8 +370,27 @@ The following are explicitly out of scope for the initial release:
 | Neutrino | ~100-150MB | Columnar + compression |
 | Improvement | 3-5x | Varies by data characteristics |
 
-### C. Glossary
+### C. Loading Time Comparison (1M rows, 10 columns)
 
+| Format | File Size | Load Time | Notes |
+|--------|-----------|-----------|-------|
+| CSV (standard Vega) | 100MB | 5-10s | Parse + object creation |
+| CSV (Neutrino) | 100MB | 1-2s | Parse + columnar compression |
+| .ntro (Neutrino) | 5-15MB | 100-200ms | Direct load, no parsing |
+| .ntro from cache | 5-15MB | 50-100ms | IndexedDB, no network |
+
+### D. File Size Comparison (1M rows, 10 columns)
+
+| Format | Size | Compression | Notes |
+|--------|------|-------------|-------|
+| CSV | 100MB | 1x (baseline) | Text format |
+| JSON | 150MB | 0.67x | More verbose than CSV |
+| .ntro | 5-15MB | 7-20x | Multi-tier compression |
+| .ntro (high cardinality) | 15-30MB | 3-7x | Less compressible data |
+
+### E. Glossary
+
+- **.ntro file**: Neutrino's native compressed columnar file format
 - **Columnar storage**: Data organized by column rather than row for better compression and cache locality
 - **SIMD**: Single Instruction Multiple Data - CPU instruction set for parallel operations
 - **WASM**: WebAssembly - portable binary format for near-native performance
