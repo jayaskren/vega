@@ -105,11 +105,15 @@ export function loadCSV(tablePtr, csvData, options = {}) {
 
   // If the schema has columns array, transform to user config format
   if (userConfig.columns && Array.isArray(userConfig.columns)) {
-    userConfig.columns = userConfig.columns.map(col => ({
-      ...col,
-      // Use inferred_type or detected_type as user_selected_type
-      user_selected_type: normalizeType(col.user_selected_type || col.inferred_type || col.detected_type)
-    }));
+    userConfig.columns = userConfig.columns.map(col => {
+      const inferredType = normalizeType(col.user_selected_type || col.inferred_type || col.detected_type);
+      return {
+        ...col,
+        // Both fields are required for user config
+        user_selected_type: inferredType,
+        original_inferred_type: col.original_inferred_type || inferredType
+      };
+    });
   }
 
   const userConfigJson = JSON.stringify(userConfig);
