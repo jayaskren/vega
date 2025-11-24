@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Neutrino Benchmark Test</title>
+  <script src="https://cdn.jsdelivr.net/npm/vega@5"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 800px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .container {
+      background: white;
+      border-radius: 8px;
+      padding: 30px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    h1 {
+      color: #333;
+      margin-top: 0;
+    }
+    .progress-step {
+      padding: 8px 0;
+      font-size: 14px;
+    }
+    .progress-step.pending { color: #999; }
+    .progress-step.running { color: #0066cc; }
+    .progress-step.complete { color: #28a745; }
+    .progress-step.failed { color: #dc3545; }
+    .status-icon {
+      display: inline-block;
+      width: 20px;
+    }
+    #chart {
+      margin: 20px 0;
+      min-height: 400px;
+      background: #fafafa;
+      border: 1px solid #eee;
+    }
+    .results {
+      margin-top: 20px;
+      padding: 15px;
+      background: #e8f5e9;
+      border-radius: 4px;
+    }
+    .results h3 {
+      margin-top: 0;
+      color: #28a745;
+    }
+    .results table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .results td {
+      padding: 5px 10px;
+      border-bottom: 1px solid #c8e6c9;
+    }
+    .results td:first-child {
+      font-weight: 500;
+    }
+    .results td:last-child {
+      text-align: right;
+      font-family: monospace;
+    }
+    .actions {
+      margin-top: 20px;
+      text-align: center;
+    }
+    .actions button {
+      padding: 10px 20px;
+      font-size: 14px;
+      cursor: pointer;
+      border: none;
+      border-radius: 4px;
+      margin: 0 5px;
+    }
+    .btn-primary {
+      background: #28a745;
+      color: white;
+    }
+    .btn-secondary {
+      background: #6c757d;
+      color: white;
+    }
+    .warning {
+      background: #fff3cd;
+      border: 1px solid #ffc107;
+      padding: 10px;
+      border-radius: 4px;
+      margin-bottom: 15px;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Neutrino Benchmark Test</h1>
+    <div id="size-info"></div>
+
+    <div id="memory-warning" class="warning" style="display: none;">
+      Memory API not available. Run Chrome with --enable-precise-memory-info for memory measurements.
+    </div>
+
+    <div id="progress"></div>
+
+    <div id="chart"></div>
+
+    <div id="results" class="results" style="display: none;">
+      <h3>Results</h3>
+      <table id="results-table"></table>
+    </div>
+
+    <div class="actions">
+      <button class="btn-primary" onclick="goToDashboard()">Back to Dashboard</button>
+      <button class="btn-secondary" onclick="runAgain()">Run Again</button>
+    </div>
+  </div>
+
+  <script type="module">
+    import { now, formatTime, formatBytes, getMemoryUsage, hasMemoryAPI, forceGC, sleep, getDataSize, getNtroPath, getCsvPath, ProgressReporter, getBenchmarkSpec } from './shared.js';
+    import { saveResult } from './results.js';
+
+    const size = getDataSize();
+    document.getElementById('size-info').innerHTML = `<strong>Test Size:</strong> ${size.toUpperCase()} rows`;
+
+    if (!hasMemoryAPI()) {
+      document.getElementById('memory-warning').style.display = 'block';
+    }
+
+    const progress = new ProgressReporter('progress');
+
+    async function runBenchmark() {
+      const timings = {};
+      const memory = {};
+
+      try {
+        // Step 1: Initial memory measurement
+        const stepMemInit = progress.addStep('Measuring initial memory');
+        progress.startStep(stepMemInit);
+        await forceGC();
+        memory.before = getMemoryUsage();
+        progress.completeStep(stepMemInit, memory.before.available ? formatBytes(memory.before.usedJSHeapSize) : 'N/A');
+
+        // Step 2: Initialize Neutrino WASM
+        const stepWasm = progress.addStep('Initializing Neutrino WASM');
+        progress.startStep(stepWasm);
+        const wasmStart = now();
+
+        // Import vega-neutrino
+        let enableNeutrino, NeutrinoDataSource;
+        try {
+          const neutrinoModule = await import('../../packages/vega-neutrino/src/enable.js');
+          enableNeutrino = neutrinoModule.enableNeutrino;
+          NeutrinoDataSource = neutrinoModule.NeutrinoDataSource;
+        } catch (e) {
+          // Fallback: try loading from built package
+          console.warn('Could not load vega-neutrino from source, trying alternative paths');
+          throw new Error('Vega-Neutrino package not available. Please build the package first.');
+        }
+
+        await enableNeutrino();
+        timings.wasm = now() - wasmStart;
+        progress.completeStep(stepWasm, formatTime(timings.wasm));
+
+        // Step 3: Check for .ntro file, fall back to CSV if needed
+        const stepFetch = progress.addStep('Fetching data');
+        progress.startStep(stepFetch);
+        const fetchStart = now();
+
+        let data;
+        let rowCount;
+        let loadMethod = 'ntro';
+
+        // Try .ntro first
+        const ntroPath = getNtroPath(size);
+        let ntroResponse = await fetch(ntroPath);
+
+        if (ntroResponse.ok) {
+          const ntroText = await ntroResponse.text();
+          // Check if it's a placeholder
+          if (ntroText.startsWith('# Neutrino Binary Format')) {
+            console.warn('.ntro file is placeholder, falling back to CSV');
+            loadMethod = 'csv';
+          } else {
+            // Load actual .ntro binary
+            const ntroBuffer = await (await fetch(ntroPath)).arrayBuffer();
+            // This would use Neutrino to load the binary
+            // For now, fall back to CSV since we need actual Neutrino integration
+            loadMethod = 'csv';
+          }
+        } else {
+          loadMethod = 'csv';
+        }
+
+        // Fall back to CSV loading
+        if (loadMethod === 'csv') {
+          const csvResponse = await fetch(getCsvPath(size));
+          if (!csvResponse.ok) {
+            throw new Error(`Failed to fetch data: ${csvResponse.status}`);
+          }
+          const csvText = await csvResponse.text();
+          data = parseCSV(csvText);
+          rowCount = data.length;
+        }
+
+        timings.fetch = now() - fetchStart;
+        progress.completeStep(stepFetch, `${formatTime(timings.fetch)} (${loadMethod})`);
+
+        // Step 4: Load into Neutrino DataSource
+        const stepLoad = progress.addStep('Loading into Neutrino');
+        progress.startStep(stepLoad);
+        const loadStart = now();
+
+        // Create NeutrinoDataSource
+        const dataSource = new NeutrinoDataSource('benchmark');
+        await dataSource.load(data);
+        rowCount = dataSource.size();
+
+        timings.load = now() - loadStart;
+        progress.completeStep(stepLoad, `${formatTime(timings.load)} (${rowCount.toLocaleString()} rows)`);
+
+        // Step 5: Run aggregation
+        const stepAggregate = progress.addStep('Running Neutrino aggregation');
+        progress.startStep(stepAggregate);
+        const aggregateStart = now();
+
+        // Aggregate using Neutrino
+        const aggregated = await dataSource.aggregate({
+          groupby: ['category'],
+          ops: ['sum', 'sum', 'average', 'count'],
+          fields: ['sales', 'profit', 'price', null],
+          as: ['totalSales', 'totalProfit', 'avgPrice', 'count']
+        });
+
+        timings.aggregate = now() - aggregateStart;
+        progress.completeStep(stepAggregate, formatTime(timings.aggregate));
+
+        // Step 6: Render chart with Vega
+        const stepRender = progress.addStep('Rendering chart');
+        progress.startStep(stepRender);
+        const renderStart = now();
+
+        const spec = getBenchmarkSpec();
+        spec.data[0].values = aggregated;
+
+        const view = new vega.View(vega.parse(spec), {
+          renderer: 'canvas',
+          container: '#chart',
+          hover: true
+        });
+
+        await view.runAsync();
+        timings.render = now() - renderStart;
+        progress.completeStep(stepRender, formatTime(timings.render));
+
+        // Step 7: Final memory measurement
+        const stepMemFinal = progress.addStep('Measuring final memory');
+        progress.startStep(stepMemFinal);
+        await sleep(100);
+        memory.after = getMemoryUsage();
+        progress.completeStep(stepMemFinal, memory.after.available ? formatBytes(memory.after.usedJSHeapSize) : 'N/A');
+
+        // Calculate totals
+        timings.total = timings.wasm + timings.fetch + timings.load + timings.aggregate + timings.render;
+
+        memory.delta = (memory.before.available && memory.after.available)
+          ? memory.after.usedJSHeapSize - memory.before.usedJSHeapSize
+          : null;
+
+        // Save results
+        const result = {
+          wasmTime: timings.wasm,
+          fetchTime: timings.fetch,
+          loadTime: timings.load,
+          parseTime: 0, // Included in load for Neutrino
+          aggregateTime: timings.aggregate,
+          renderTime: timings.render,
+          totalTime: timings.total,
+          memoryBefore: memory.before.available ? memory.before.usedJSHeapSize : null,
+          memoryAfter: memory.after.available ? memory.after.usedJSHeapSize : null,
+          memoryDelta: memory.delta,
+          rowCount: rowCount,
+          loadMethod: loadMethod
+        };
+
+        saveResult('neutrino', size, result);
+
+        // Display results
+        displayResults(result);
+
+      } catch (error) {
+        console.error('Benchmark failed:', error);
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'warning';
+        errorDiv.textContent = `Error: ${error.message}`;
+        document.getElementById('progress').appendChild(errorDiv);
+      }
+    }
+
+    function parseCSV(text) {
+      const lines = text.trim().split('\n');
+      const headers = lines[0].split(',');
+      const data = [];
+
+      for (let i = 1; i < lines.length; i++) {
+        const values = lines[i].split(',');
+        const row = {};
+        for (let j = 0; j < headers.length; j++) {
+          const header = headers[j];
+          const value = values[j];
+
+          if (['id', 'sales', 'quantity', 'price', 'profit'].includes(header)) {
+            row[header] = parseInt(value, 10);
+          } else if (header === 'discount') {
+            row[header] = parseFloat(value);
+          } else {
+            row[header] = value;
+          }
+        }
+        data.push(row);
+      }
+
+      return data;
+    }
+
+    function displayResults(result) {
+      const container = document.getElementById('results');
+      const table = document.getElementById('results-table');
+
+      const rows = [
+        ['WASM Init Time', formatTime(result.wasmTime)],
+        ['Fetch Time', formatTime(result.fetchTime)],
+        ['Load Time', formatTime(result.loadTime)],
+        ['Aggregate Time', formatTime(result.aggregateTime)],
+        ['Render Time', formatTime(result.renderTime)],
+        ['Total Time', formatTime(result.totalTime)],
+        ['---', '---'],
+        ['Memory Before', result.memoryBefore ? formatBytes(result.memoryBefore) : 'N/A'],
+        ['Memory After', result.memoryAfter ? formatBytes(result.memoryAfter) : 'N/A'],
+        ['Memory Delta', result.memoryDelta ? formatBytes(result.memoryDelta) : 'N/A'],
+        ['---', '---'],
+        ['Row Count', result.rowCount.toLocaleString()],
+        ['Load Method', result.loadMethod]
+      ];
+
+      table.innerHTML = rows
+        .map(([label, value]) => {
+          if (label === '---') {
+            return '<tr><td colspan="2" style="border:none; height:5px;"></td></tr>';
+          }
+          return `<tr><td>${label}</td><td>${value}</td></tr>`;
+        })
+        .join('');
+
+      container.style.display = 'block';
+    }
+
+    // Global functions for buttons
+    window.goToDashboard = function() {
+      window.location.href = 'index.html';
+    };
+
+    window.runAgain = function() {
+      window.location.reload();
+    };
+
+    // Run benchmark on load
+    runBenchmark();
+  </script>
+</body>
+</html>

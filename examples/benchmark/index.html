@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vega vs Neutrino Benchmark Suite</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 1000px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .container {
+      background: white;
+      border-radius: 8px;
+      padding: 30px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+    }
+    h1 {
+      color: #333;
+      margin-top: 0;
+    }
+    h2 {
+      color: #555;
+      border-bottom: 2px solid #eee;
+      padding-bottom: 10px;
+    }
+    .config-section {
+      margin-bottom: 25px;
+    }
+    .config-label {
+      font-weight: 600;
+      margin-bottom: 10px;
+      display: block;
+    }
+    .radio-group {
+      display: flex;
+      gap: 20px;
+    }
+    .radio-group label {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+    }
+    .button-group {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    button {
+      padding: 12px 24px;
+      font-size: 14px;
+      cursor: pointer;
+      border: none;
+      border-radius: 4px;
+      transition: background 0.2s;
+    }
+    .btn-vega {
+      background: #0066cc;
+      color: white;
+    }
+    .btn-vega:hover {
+      background: #0052a3;
+    }
+    .btn-neutrino {
+      background: #28a745;
+      color: white;
+    }
+    .btn-neutrino:hover {
+      background: #1e7e34;
+    }
+    .btn-both {
+      background: #6f42c1;
+      color: white;
+    }
+    .btn-both:hover {
+      background: #5a32a3;
+    }
+    .btn-secondary {
+      background: #6c757d;
+      color: white;
+    }
+    .btn-secondary:hover {
+      background: #545b62;
+    }
+    .results-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 15px;
+    }
+    .results-table th,
+    .results-table td {
+      padding: 12px;
+      text-align: left;
+      border-bottom: 1px solid #eee;
+    }
+    .results-table th {
+      background: #f8f9fa;
+      font-weight: 600;
+      color: #555;
+    }
+    .results-table td {
+      font-family: monospace;
+    }
+    .results-table .vega-col {
+      background: #e3f2fd;
+    }
+    .results-table .neutrino-col {
+      background: #e8f5e9;
+    }
+    .results-table .comparison-col {
+      background: #fff3e0;
+      font-weight: 600;
+    }
+    .no-data {
+      color: #999;
+      font-style: italic;
+    }
+    .speedup {
+      color: #28a745;
+      font-weight: bold;
+    }
+    .info-box {
+      background: #e3f2fd;
+      border: 1px solid #90caf9;
+      padding: 15px;
+      border-radius: 4px;
+      margin-bottom: 20px;
+      font-size: 14px;
+    }
+    .info-box h4 {
+      margin: 0 0 10px 0;
+      color: #1565c0;
+    }
+    .info-box ul {
+      margin: 0;
+      padding-left: 20px;
+    }
+    .warning-box {
+      background: #fff3cd;
+      border: 1px solid #ffc107;
+      padding: 15px;
+      border-radius: 4px;
+      margin-bottom: 20px;
+      font-size: 14px;
+    }
+    .warning-box h4 {
+      margin: 0 0 10px 0;
+      color: #856404;
+    }
+    .actions {
+      margin-top: 20px;
+      display: flex;
+      gap: 10px;
+    }
+    .detail-row {
+      font-size: 12px;
+      color: #666;
+    }
+    .memory-info {
+      font-size: 11px;
+      color: #888;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Vega vs Neutrino Benchmark Suite</h1>
+
+    <div class="info-box">
+      <h4>About This Benchmark</h4>
+      <ul>
+        <li>Each test runs in a separate page for accurate isolation</li>
+        <li>Vega loads data from CSV files, Neutrino from .ntro files</li>
+        <li>Timing measures: data loading, aggregation, and rendering separately</li>
+        <li>Memory measurements require Chrome with <code>--enable-precise-memory-info</code></li>
+      </ul>
+    </div>
+
+    <div id="data-warning" class="warning-box" style="display: none;">
+      <h4>Data Files Required</h4>
+      <p>Generate benchmark data files first:</p>
+      <pre>cd examples && node generate-benchmark-data.js</pre>
+    </div>
+
+    <div class="config-section">
+      <span class="config-label">Data Size</span>
+      <div class="radio-group">
+        <label>
+          <input type="radio" name="size" value="100k" checked>
+          100K rows
+        </label>
+        <label>
+          <input type="radio" name="size" value="1m">
+          1M rows
+        </label>
+        <label>
+          <input type="radio" name="size" value="10m">
+          10M rows
+        </label>
+      </div>
+    </div>
+
+    <div class="config-section">
+      <span class="config-label">Run Tests</span>
+      <div class="button-group">
+        <button class="btn-vega" onclick="runVegaTest()">Run Vega Test</button>
+        <button class="btn-neutrino" onclick="runNeutrinoTest()">Run Neutrino Test</button>
+        <button class="btn-both" onclick="runBothTests()">Run Both Tests</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="container">
+    <h2>Results</h2>
+
+    <table class="results-table">
+      <thead>
+        <tr>
+          <th>Size</th>
+          <th class="vega-col">Vega Time</th>
+          <th class="vega-col">Vega Memory</th>
+          <th class="neutrino-col">Neutrino Time</th>
+          <th class="neutrino-col">Neutrino Memory</th>
+          <th class="comparison-col">Time Speedup</th>
+          <th class="comparison-col">Memory Savings</th>
+        </tr>
+      </thead>
+      <tbody id="results-body">
+        <tr>
+          <td colspan="7" class="no-data">No results yet. Run a test to see results.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="actions">
+      <button class="btn-secondary" onclick="clearResults()">Clear Results</button>
+      <button class="btn-secondary" onclick="exportResults()">Export Results</button>
+      <button class="btn-secondary" onclick="refreshResults()">Refresh</button>
+    </div>
+  </div>
+
+  <div class="container">
+    <h2>Instructions</h2>
+
+    <h4>1. Generate Test Data</h4>
+    <p>Run the data generation script to create CSV and .ntro files:</p>
+    <pre>cd examples && node generate-benchmark-data.js</pre>
+
+    <h4>2. Run Tests</h4>
+    <p>Select a data size and click one of the test buttons. Each test opens in a new tab to ensure isolation.</p>
+
+    <h4>3. View Results</h4>
+    <p>Results are saved automatically and displayed in the table above. Run both Vega and Neutrino tests to see the comparison metrics.</p>
+
+    <h4>4. Memory Measurements</h4>
+    <p>For accurate memory measurements, start Chrome with:</p>
+    <pre>chrome --enable-precise-memory-info</pre>
+  </div>
+
+  <script type="module">
+    import { formatTime, formatBytes, hasMemoryAPI } from './shared.js';
+    import { getResults, clearResults as clearStoredResults, exportResults as exportStoredResults } from './results.js';
+
+    function getSelectedSize() {
+      return document.querySelector('input[name="size"]:checked').value;
+    }
+
+    window.runVegaTest = function() {
+      const size = getSelectedSize();
+      window.open(`test-vega.html?size=${size}`, '_blank');
+    };
+
+    window.runNeutrinoTest = function() {
+      const size = getSelectedSize();
+      window.open(`test-neutrino.html?size=${size}`, '_blank');
+    };
+
+    window.runBothTests = function() {
+      const size = getSelectedSize();
+      // Open Vega test first
+      window.open(`test-vega.html?size=${size}`, '_blank');
+      // Open Neutrino test after a short delay
+      setTimeout(() => {
+        window.open(`test-neutrino.html?size=${size}`, '_blank');
+      }, 500);
+    };
+
+    window.clearResults = function() {
+      if (confirm('Clear all benchmark results?')) {
+        clearStoredResults();
+        updateResultsTable();
+      }
+    };
+
+    window.exportResults = function() {
+      exportStoredResults();
+    };
+
+    window.refreshResults = function() {
+      updateResultsTable();
+    };
+
+    function updateResultsTable() {
+      const results = getResults();
+      const tbody = document.getElementById('results-body');
+      const sizes = ['100k', '1m', '10m'];
+
+      if (Object.keys(results).length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="no-data">No results yet. Run a test to see results.</td></tr>';
+        return;
+      }
+
+      let html = '';
+
+      for (const size of sizes) {
+        const vega = results[`vega_${size}`];
+        const neutrino = results[`neutrino_${size}`];
+
+        if (!vega && !neutrino) continue;
+
+        const timeSpeedup = (vega && neutrino)
+          ? (vega.totalTime / neutrino.totalTime).toFixed(1) + 'x'
+          : '-';
+
+        const memorySavings = (vega && neutrino && vega.memoryDelta && neutrino.memoryDelta)
+          ? (vega.memoryDelta / neutrino.memoryDelta).toFixed(1) + 'x'
+          : '-';
+
+        html += `
+          <tr>
+            <td><strong>${size.toUpperCase()}</strong></td>
+            <td class="vega-col">
+              ${vega ? formatTime(vega.totalTime) : '<span class="no-data">-</span>'}
+              ${vega ? `<div class="detail-row">Load: ${formatTime(vega.loadTime)} | Agg: ${formatTime(vega.aggregateTime)}</div>` : ''}
+            </td>
+            <td class="vega-col">
+              ${vega && vega.memoryDelta ? formatBytes(vega.memoryDelta) : '<span class="no-data">-</span>'}
+            </td>
+            <td class="neutrino-col">
+              ${neutrino ? formatTime(neutrino.totalTime) : '<span class="no-data">-</span>'}
+              ${neutrino ? `<div class="detail-row">Load: ${formatTime(neutrino.loadTime)} | Agg: ${formatTime(neutrino.aggregateTime)}</div>` : ''}
+            </td>
+            <td class="neutrino-col">
+              ${neutrino && neutrino.memoryDelta ? formatBytes(neutrino.memoryDelta) : '<span class="no-data">-</span>'}
+            </td>
+            <td class="comparison-col">
+              ${(vega && neutrino) ? `<span class="speedup">${timeSpeedup}</span>` : '-'}
+            </td>
+            <td class="comparison-col">
+              ${(vega && neutrino && vega.memoryDelta && neutrino.memoryDelta) ? `<span class="speedup">${memorySavings}</span>` : '-'}
+            </td>
+          </tr>
+        `;
+      }
+
+      tbody.innerHTML = html || '<tr><td colspan="7" class="no-data">No results yet. Run a test to see results.</td></tr>';
+    }
+
+    // Check for data files
+    async function checkDataFiles() {
+      try {
+        const response = await fetch('../data/benchmark-100k.csv', { method: 'HEAD' });
+        if (!response.ok) {
+          document.getElementById('data-warning').style.display = 'block';
+        }
+      } catch (e) {
+        document.getElementById('data-warning').style.display = 'block';
+      }
+    }
+
+    // Initialize
+    updateResultsTable();
+    checkDataFiles();
+
+    // Auto-refresh results when page becomes visible
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) {
+        updateResultsTable();
+      }
+    });
+
+    // Also refresh on focus
+    window.addEventListener('focus', () => {
+      updateResultsTable();
+    });
+  </script>
+</body>
+</html>

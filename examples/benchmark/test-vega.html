@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vega Benchmark Test</title>
+  <script src="https://cdn.jsdelivr.net/npm/vega@5"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 800px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .container {
+      background: white;
+      border-radius: 8px;
+      padding: 30px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    h1 {
+      color: #333;
+      margin-top: 0;
+    }
+    .progress-step {
+      padding: 8px 0;
+      font-size: 14px;
+    }
+    .progress-step.pending { color: #999; }
+    .progress-step.running { color: #0066cc; }
+    .progress-step.complete { color: #28a745; }
+    .progress-step.failed { color: #dc3545; }
+    .status-icon {
+      display: inline-block;
+      width: 20px;
+    }
+    #chart {
+      margin: 20px 0;
+      min-height: 400px;
+      background: #fafafa;
+      border: 1px solid #eee;
+    }
+    .results {
+      margin-top: 20px;
+      padding: 15px;
+      background: #e8f4fd;
+      border-radius: 4px;
+    }
+    .results h3 {
+      margin-top: 0;
+      color: #0066cc;
+    }
+    .results table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .results td {
+      padding: 5px 10px;
+      border-bottom: 1px solid #d0e3f0;
+    }
+    .results td:first-child {
+      font-weight: 500;
+    }
+    .results td:last-child {
+      text-align: right;
+      font-family: monospace;
+    }
+    .actions {
+      margin-top: 20px;
+      text-align: center;
+    }
+    .actions button {
+      padding: 10px 20px;
+      font-size: 14px;
+      cursor: pointer;
+      border: none;
+      border-radius: 4px;
+      margin: 0 5px;
+    }
+    .btn-primary {
+      background: #0066cc;
+      color: white;
+    }
+    .btn-secondary {
+      background: #6c757d;
+      color: white;
+    }
+    .warning {
+      background: #fff3cd;
+      border: 1px solid #ffc107;
+      padding: 10px;
+      border-radius: 4px;
+      margin-bottom: 15px;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Vega Benchmark Test</h1>
+    <div id="size-info"></div>
+
+    <div id="memory-warning" class="warning" style="display: none;">
+      Memory API not available. Run Chrome with --enable-precise-memory-info for memory measurements.
+    </div>
+
+    <div id="progress"></div>
+
+    <div id="chart"></div>
+
+    <div id="results" class="results" style="display: none;">
+      <h3>Results</h3>
+      <table id="results-table"></table>
+    </div>
+
+    <div class="actions">
+      <button class="btn-primary" onclick="goToDashboard()">Back to Dashboard</button>
+      <button class="btn-secondary" onclick="runAgain()">Run Again</button>
+    </div>
+  </div>
+
+  <script type="module">
+    import { now, formatTime, formatBytes, getMemoryUsage, hasMemoryAPI, forceGC, sleep, getDataSize, getCsvPath, ProgressReporter, getBenchmarkSpec } from './shared.js';
+    import { saveResult } from './results.js';
+
+    const size = getDataSize();
+    document.getElementById('size-info').innerHTML = `<strong>Test Size:</strong> ${size.toUpperCase()} rows`;
+
+    if (!hasMemoryAPI()) {
+      document.getElementById('memory-warning').style.display = 'block';
+    }
+
+    const progress = new ProgressReporter('progress');
+
+    async function runBenchmark() {
+      const timings = {};
+      const memory = {};
+
+      try {
+        // Step 1: Initial memory measurement
+        const stepMemInit = progress.addStep('Measuring initial memory');
+        progress.startStep(stepMemInit);
+        await forceGC();
+        memory.before = getMemoryUsage();
+        progress.completeStep(stepMemInit, memory.before.available ? formatBytes(memory.before.usedJSHeapSize) : 'N/A');
+
+        // Step 2: Fetch CSV
+        const stepFetch = progress.addStep('Fetching CSV data');
+        progress.startStep(stepFetch);
+        const fetchStart = now();
+        const response = await fetch(getCsvPath(size));
+        if (!response.ok) {
+          throw new Error(`Failed to fetch CSV: ${response.status} ${response.statusText}`);
+        }
+        const csvText = await response.text();
+        timings.fetch = now() - fetchStart;
+        progress.completeStep(stepFetch, formatTime(timings.fetch));
+
+        // Step 3: Parse CSV
+        const stepParse = progress.addStep('Parsing CSV data');
+        progress.startStep(stepParse);
+        const parseStart = now();
+        const data = parseCSV(csvText);
+        timings.parse = now() - parseStart;
+        progress.completeStep(stepParse, `${formatTime(timings.parse)} (${data.length.toLocaleString()} rows)`);
+
+        // Step 4: Create Vega view
+        const stepAggregate = progress.addStep('Running Vega aggregation');
+        progress.startStep(stepAggregate);
+        const aggregateStart = now();
+
+        const spec = getBenchmarkSpec();
+        spec.data[0].values = data;
+
+        const view = new vega.View(vega.parse(spec), {
+          renderer: 'canvas',
+          container: '#chart',
+          hover: true
+        });
+
+        await view.runAsync();
+        timings.aggregate = now() - aggregateStart;
+        progress.completeStep(stepAggregate, formatTime(timings.aggregate));
+
+        // Step 5: Render (already done with runAsync, but measure separately for clarity)
+        const stepRender = progress.addStep('Rendering chart');
+        progress.startStep(stepRender);
+        const renderStart = now();
+        // Force a re-render to get accurate render timing
+        await view.resize().runAsync();
+        timings.render = now() - renderStart;
+        progress.completeStep(stepRender, formatTime(timings.render));
+
+        // Step 6: Final memory measurement
+        const stepMemFinal = progress.addStep('Measuring final memory');
+        progress.startStep(stepMemFinal);
+        await sleep(100); // Give browser time to settle
+        memory.after = getMemoryUsage();
+        progress.completeStep(stepMemFinal, memory.after.available ? formatBytes(memory.after.usedJSHeapSize) : 'N/A');
+
+        // Calculate totals
+        timings.load = timings.fetch + timings.parse;
+        timings.total = timings.fetch + timings.parse + timings.aggregate + timings.render;
+
+        memory.delta = (memory.before.available && memory.after.available)
+          ? memory.after.usedJSHeapSize - memory.before.usedJSHeapSize
+          : null;
+
+        // Save results
+        const result = {
+          fetchTime: timings.fetch,
+          parseTime: timings.parse,
+          loadTime: timings.load,
+          aggregateTime: timings.aggregate,
+          renderTime: timings.render,
+          totalTime: timings.total,
+          memoryBefore: memory.before.available ? memory.before.usedJSHeapSize : null,
+          memoryAfter: memory.after.available ? memory.after.usedJSHeapSize : null,
+          memoryDelta: memory.delta,
+          rowCount: data.length
+        };
+
+        saveResult('vega', size, result);
+
+        // Display results
+        displayResults(result);
+
+      } catch (error) {
+        console.error('Benchmark failed:', error);
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'warning';
+        errorDiv.textContent = `Error: ${error.message}`;
+        document.getElementById('progress').appendChild(errorDiv);
+      }
+    }
+
+    function parseCSV(text) {
+      const lines = text.trim().split('\n');
+      const headers = lines[0].split(',');
+      const data = [];
+
+      for (let i = 1; i < lines.length; i++) {
+        const values = lines[i].split(',');
+        const row = {};
+        for (let j = 0; j < headers.length; j++) {
+          const header = headers[j];
+          const value = values[j];
+
+          // Parse numeric fields
+          if (['id', 'sales', 'quantity', 'price', 'profit'].includes(header)) {
+            row[header] = parseInt(value, 10);
+          } else if (header === 'discount') {
+            row[header] = parseFloat(value);
+          } else {
+            row[header] = value;
+          }
+        }
+        data.push(row);
+      }
+
+      return data;
+    }
+
+    function displayResults(result) {
+      const container = document.getElementById('results');
+      const table = document.getElementById('results-table');
+
+      const rows = [
+        ['Fetch Time', formatTime(result.fetchTime)],
+        ['Parse Time', formatTime(result.parseTime)],
+        ['Load Time (Total)', formatTime(result.loadTime)],
+        ['Aggregate Time', formatTime(result.aggregateTime)],
+        ['Render Time', formatTime(result.renderTime)],
+        ['Total Time', formatTime(result.totalTime)],
+        ['---', '---'],
+        ['Memory Before', result.memoryBefore ? formatBytes(result.memoryBefore) : 'N/A'],
+        ['Memory After', result.memoryAfter ? formatBytes(result.memoryAfter) : 'N/A'],
+        ['Memory Delta', result.memoryDelta ? formatBytes(result.memoryDelta) : 'N/A'],
+        ['---', '---'],
+        ['Row Count', result.rowCount.toLocaleString()]
+      ];
+
+      table.innerHTML = rows
+        .map(([label, value]) => {
+          if (label === '---') {
+            return '<tr><td colspan="2" style="border:none; height:5px;"></td></tr>';
+          }
+          return `<tr><td>${label}</td><td>${value}</td></tr>`;
+        })
+        .join('');
+
+      container.style.display = 'block';
+    }
+
+    // Global functions for buttons
+    window.goToDashboard = function() {
+      window.location.href = 'index.html';
+    };
+
+    window.runAgain = function() {
+      window.location.reload();
+    };
+
+    // Run benchmark on load
+    runBenchmark();
+  </script>
+</body>
+</html>
