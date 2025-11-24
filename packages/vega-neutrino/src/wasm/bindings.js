@@ -87,6 +87,13 @@ export function loadCSV(tablePtr, csvData, options = {}) {
 
   function normalizeType(typeValue) {
     if (!typeValue) return 'String';
+    // If it's not a string, try to extract the type name
+    if (typeof typeValue !== 'string') {
+      // Might be an object with a type property
+      if (typeValue.type) typeValue = typeValue.type;
+      else if (typeValue.name) typeValue = typeValue.name;
+      else return 'String';
+    }
     // Check if already valid
     if (validTypes.includes(typeValue)) return typeValue;
     // Try lowercase mapping
