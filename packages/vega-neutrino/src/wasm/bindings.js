@@ -51,17 +51,35 @@ export function loadCSV(tablePtr, csvData, options = {}) {
   const encoder = new TextEncoder();
   const csvBytes = encoder.encode(csvData);
 
-  // Create schema analyzer using factory method
-  const analyzer = wasm.WasmSchemaAnalyzer.fast_preview();
+  // Create schema analyzer using constructor
+  const analyzer = new wasm.WasmSchemaAnalyzer();
 
   // Analyze CSV to get schema
   const schema = analyzer.analyze_csv_buffer(csvBytes);
 
-  // Convert schema to JSON string if needed
-  const schemaJson = typeof schema === 'string' ? schema : JSON.stringify(schema);
+  // The schema analysis returns column info, but create_table_from_csv
+  // expects a user config with user_selected_type for each column.
+  // Transform the schema into user config format.
+  let userConfig;
+  if (typeof schema === 'string') {
+    userConfig = JSON.parse(schema);
+  } else {
+    userConfig = schema;
+  }
 
-  // Create table from CSV with the analyzed schema
-  const table = analyzer.create_table_from_csv(csvBytes, schemaJson);
+  // If the schema has columns array, transform to user config format
+  if (userConfig.columns && Array.isArray(userConfig.columns)) {
+    userConfig.columns = userConfig.columns.map(col => ({
+      ...col,
+      // Use inferred_type or detected_type as user_selected_type
+      user_selected_type: col.user_selected_type || col.inferred_type || col.detected_type || col.type || 'String'
+    }));
+  }
+
+  const userConfigJson = JSON.stringify(userConfig);
+
+  // Create table from CSV with the user config
+  const table = analyzer.create_table_from_csv(csvBytes, userConfigJson);
 
   return table;
 }
