@@ -1,0 +1,11 @@
+# Neutrino Binary Format
+#
+# This is a placeholder file. To generate actual .ntro files:
+#
+# 1. Load the CSV data into Neutrino using the web interface
+# 2. Export as .ntro format
+#
+# Or use the Neutrino CLI:
+#   neutrino convert benchmark-100k.csv benchmark-100k.ntro
+#
+# CSV source: /home/user/vega/examples/data/benchmark-100k.csv
