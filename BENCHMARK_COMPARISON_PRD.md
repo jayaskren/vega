@@ -353,12 +353,18 @@ examples/
 | WASM loading fails | Clear error messages, retry option |
 | Results lost on refresh | Use localStorage persistence |
 
-## Open Questions
+## Design Decisions
 
-1. Should we also test with data loaded via `fetch()` into both systems (to isolate aggregation performance)?
-2. Should we add WebSocket/streaming tests for real-time data scenarios?
-3. Should we measure rendering performance separately from aggregation?
-4. Should we include warmup runs before measured runs?
+1. **Isolate aggregation performance**: Yes - include tests with data loaded via `fetch()` into both systems to measure pure aggregation/transformation performance separate from file loading.
+
+2. **Real-time data scenarios**: Out of scope - WebSocket/streaming tests will not be included in this benchmark suite.
+
+3. **Separate rendering measurement**: Yes - measure rendering performance separately from aggregation to identify bottlenecks. This means timing:
+   - Data loading (file fetch + parse)
+   - Aggregation/transformation
+   - Chart rendering
+
+4. **Warmup runs**: Not included - warmup runs can cache data which would affect results and not reflect real-world first-load scenarios.
 
 ## Appendix: Current Demo Issues
 
