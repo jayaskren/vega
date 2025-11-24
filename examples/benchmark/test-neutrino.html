@@ -101,11 +101,6 @@
     <h1>Neutrino Benchmark Test</h1>
     <div id="size-info"></div>
 
-    <div class="warning">
-      <strong>Simulation Mode:</strong> This test simulates Neutrino behavior using JavaScript.
-      Actual Neutrino with WASM/SIMD would show significantly better performance.
-    </div>
-
     <div id="memory-warning" class="warning" style="display: none;">
       Memory API not available. Run Chrome with --enable-precise-memory-info for memory measurements.
     </div>
@@ -129,6 +124,10 @@
     import { now, formatTime, formatBytes, getMemoryUsage, hasMemoryAPI, forceGC, sleep, getDataSize, getNtroPath, getCsvPath, ProgressReporter, getBenchmarkSpec } from './shared.js';
     import { saveResult } from './results.js';
 
+    // Import Neutrino modules
+    import { initializeNeutrino } from '../../packages/vega-neutrino/src/wasm/loader.js';
+    import * as bindings from '../../packages/vega-neutrino/src/wasm/bindings.js';
+
     const size = getDataSize();
     document.getElementById('size-info').innerHTML = `<strong>Test Size:</strong> ${size.toUpperCase()} rows`;
 
@@ -150,82 +149,53 @@
         memory.before = getMemoryUsage();
         progress.completeStep(stepMemInit, memory.before.available ? formatBytes(memory.before.usedJSHeapSize) : 'N/A');
 
-        // Step 2: Initialize Neutrino WASM (simulated)
+        // Step 2: Initialize Neutrino WASM
         const stepWasm = progress.addStep('Initializing Neutrino WASM');
         progress.startStep(stepWasm);
         const wasmStart = now();
 
-        // Note: This is a simulation. Actual Neutrino WASM would be loaded here.
-        // The vega-neutrino package needs to be built and the WASM module available.
-        // For now, we simulate the initialization time.
-        await sleep(50); // Simulate WASM init time
+        await initializeNeutrino();
 
         timings.wasm = now() - wasmStart;
-        progress.completeStep(stepWasm, `${formatTime(timings.wasm)} (simulated)`);
+        progress.completeStep(stepWasm, formatTime(timings.wasm));
 
-        // Step 3: Check for .ntro file, fall back to CSV if needed
+        // Step 3: Fetch CSV data
         const stepFetch = progress.addStep('Fetching data');
         progress.startStep(stepFetch);
         const fetchStart = now();
 
-        let data;
-        let rowCount;
-        let loadMethod = 'ntro';
-
-        // Try .ntro first
-        const ntroPath = getNtroPath(size);
-        let ntroResponse = await fetch(ntroPath);
-
-        if (ntroResponse.ok) {
-          const ntroText = await ntroResponse.text();
-          // Check if it's a placeholder
-          if (ntroText.startsWith('# Neutrino Binary Format')) {
-            console.warn('.ntro file is placeholder, falling back to CSV');
-            loadMethod = 'csv';
-          } else {
-            // Load actual .ntro binary
-            const ntroBuffer = await (await fetch(ntroPath)).arrayBuffer();
-            // This would use Neutrino to load the binary
-            // For now, fall back to CSV since we need actual Neutrino integration
-            loadMethod = 'csv';
-          }
-        } else {
-          loadMethod = 'csv';
-        }
-
-        // Load CSV data (in production, this would load .ntro binary)
         const csvResponse = await fetch(getCsvPath(size));
         if (!csvResponse.ok) {
           throw new Error(`Failed to fetch data: ${csvResponse.status}`);
         }
         const csvText = await csvResponse.text();
-        data = parseCSV(csvText);
-        rowCount = data.length;
-        loadMethod = 'csv (simulating .ntro)';
 
         timings.fetch = now() - fetchStart;
-        progress.completeStep(stepFetch, `${formatTime(timings.fetch)}`);
+        progress.completeStep(stepFetch, formatTime(timings.fetch));
 
-        // Step 4: Load into Neutrino DataSource (simulated)
+        // Step 4: Load into Neutrino (columnar storage)
         const stepLoad = progress.addStep('Loading into Neutrino');
         progress.startStep(stepLoad);
         const loadStart = now();
 
-        // Simulated Neutrino loading - in reality this would use columnar storage
-        // and would be much faster for .ntro files
-        await sleep(10); // Simulate columnar conversion
+        const table = bindings.loadCSV(null, csvText);
+        const rowCount = bindings.getRowCount(table);
 
         timings.load = now() - loadStart;
         progress.completeStep(stepLoad, `${formatTime(timings.load)} (${rowCount.toLocaleString()} rows)`);
 
-        // Step 5: Run aggregation (simulated Neutrino SIMD)
+        // Step 5: Run aggregation using Neutrino SIMD
         const stepAggregate = progress.addStep('Running Neutrino aggregation');
         progress.startStep(stepAggregate);
         const aggregateStart = now();
 
-        // Simulated Neutrino aggregation - uses optimized JS
-        // In reality, Neutrino would use SIMD and be much faster
-        const aggregated = performAggregation(data);
+        // Perform aggregation using Neutrino WASM
+        const aggregated = bindings.aggregate(table, {
+          groupby: ['category'],
+          ops: ['sum', 'sum', 'average', 'count'],
+          fields: ['sales', 'profit', 'price', null],
+          as: ['totalSales', 'totalProfit', 'avgPrice', 'count']
+        });
 
         timings.aggregate = now() - aggregateStart;
         progress.completeStep(stepAggregate, formatTime(timings.aggregate));
@@ -262,26 +232,32 @@
           ? memory.after.usedJSHeapSize - memory.before.usedJSHeapSize
           : null;
 
+        // Get Neutrino memory usage
+        const neutrinoMemory = bindings.getMemoryUsage(table);
+
         // Save results
         const result = {
           wasmTime: timings.wasm,
           fetchTime: timings.fetch,
           loadTime: timings.load,
-          parseTime: 0, // Included in load for Neutrino
+          parseTime: 0,
           aggregateTime: timings.aggregate,
           renderTime: timings.render,
           totalTime: timings.total,
           memoryBefore: memory.before.available ? memory.before.usedJSHeapSize : null,
           memoryAfter: memory.after.available ? memory.after.usedJSHeapSize : null,
           memoryDelta: memory.delta,
-          rowCount: rowCount,
-          loadMethod: loadMethod
+          neutrinoMemory: neutrinoMemory,
+          rowCount: rowCount
         };
 
         saveResult('neutrino', size, result);
 
         // Display results
         displayResults(result);
+
+        // Clean up
+        bindings.freeTable(table);
 
       } catch (error) {
         console.error('Benchmark failed:', error);
@@ -290,64 +266,6 @@
         errorDiv.textContent = `Error: ${error.message}`;
         document.getElementById('progress').appendChild(errorDiv);
       }
-    }
-
-    function parseCSV(text) {
-      const lines = text.trim().split('\n');
-      const headers = lines[0].split(',');
-      const data = [];
-
-      for (let i = 1; i < lines.length; i++) {
-        const values = lines[i].split(',');
-        const row = {};
-        for (let j = 0; j < headers.length; j++) {
-          const header = headers[j];
-          const value = values[j];
-
-          if (['id', 'sales', 'quantity', 'price', 'profit'].includes(header)) {
-            row[header] = parseInt(value, 10);
-          } else if (header === 'discount') {
-            row[header] = parseFloat(value);
-          } else {
-            row[header] = value;
-          }
-        }
-        data.push(row);
-      }
-
-      return data;
-    }
-
-    // Simulated Neutrino aggregation (optimized JS)
-    // Actual Neutrino would use SIMD-accelerated columnar operations
-    function performAggregation(data) {
-      const groups = new Map();
-
-      for (const row of data) {
-        const key = row.category;
-        if (!groups.has(key)) {
-          groups.set(key, {
-            category: key,
-            totalSales: 0,
-            totalProfit: 0,
-            priceSum: 0,
-            count: 0
-          });
-        }
-        const group = groups.get(key);
-        group.totalSales += row.sales;
-        group.totalProfit += row.profit;
-        group.priceSum += row.price;
-        group.count += 1;
-      }
-
-      return Array.from(groups.values()).map(g => ({
-        category: g.category,
-        totalSales: g.totalSales,
-        totalProfit: g.totalProfit,
-        avgPrice: g.priceSum / g.count,
-        count: g.count
-      }));
     }
 
     function displayResults(result) {
@@ -365,9 +283,9 @@
         ['Memory Before', result.memoryBefore ? formatBytes(result.memoryBefore) : 'N/A'],
         ['Memory After', result.memoryAfter ? formatBytes(result.memoryAfter) : 'N/A'],
         ['Memory Delta', result.memoryDelta ? formatBytes(result.memoryDelta) : 'N/A'],
+        ['Neutrino Memory', result.neutrinoMemory ? formatBytes(result.neutrinoMemory) : 'N/A'],
         ['---', '---'],
-        ['Row Count', result.rowCount.toLocaleString()],
-        ['Load Method', result.loadMethod]
+        ['Row Count', result.rowCount.toLocaleString()]
       ];
 
       table.innerHTML = rows
