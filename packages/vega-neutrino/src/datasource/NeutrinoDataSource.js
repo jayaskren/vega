@@ -66,9 +66,6 @@ inherits(NeutrinoDataSource, Transform, {
     const df = this.dataflow;
 
     try {
-      // Create Neutrino table
-      this._table = bindings.createTable();
-
       if (isNtroFile(_.url, _.format)) {
         // Load native .ntro file - fast path
         const response = await fetch(_.url);
@@ -76,7 +73,7 @@ inherits(NeutrinoDataSource, Transform, {
           throw new Error(`Failed to fetch ${_.url}: ${response.status}`);
         }
         const ntroBytes = await response.arrayBuffer();
-        bindings.loadNtro(this._table, ntroBytes);
+        this._table = bindings.loadNtro(null, ntroBytes);
 
         // Optionally cache for faster subsequent loads
         if (_.cache !== false) {
@@ -93,10 +90,10 @@ inherits(NeutrinoDataSource, Transform, {
 
         if (formatType === 'csv') {
           const csvData = await response.text();
-          bindings.loadCSV(this._table, csvData);
+          this._table = bindings.loadCSV(null, csvData);
         } else {
           const jsonData = await response.json();
-          bindings.loadJSON(this._table, jsonData);
+          this._table = bindings.loadJSON(null, jsonData);
         }
 
         // Cache as .ntro for faster subsequent loads
@@ -118,11 +115,8 @@ inherits(NeutrinoDataSource, Transform, {
 
   async _loadFromValues(_, pulse) {
     try {
-      // Create Neutrino table
-      this._table = bindings.createTable();
-
-      // Load values as JSON
-      bindings.loadJSON(this._table, _.values);
+      // Load values as JSON - loadJSON now returns a new table
+      this._table = bindings.loadJSON(null, _.values);
 
       this._buildTuples(pulse);
       this._loaded = true;

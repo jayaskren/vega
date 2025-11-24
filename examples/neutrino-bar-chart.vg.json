@@ -1,0 +1,126 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v5.json",
+  "description": "A bar chart example using Neutrino for large dataset support",
+  "width": 800,
+  "height": 400,
+  "padding": 5,
+
+  "data": [
+    {
+      "name": "table",
+      "url": "data/sales.csv",
+      "format": {"type": "csv"},
+      "neutrino": true,
+      "transform": [
+        {
+          "type": "aggregate",
+          "groupby": ["category"],
+          "ops": ["sum", "count", "mean"],
+          "fields": ["sales", null, "sales"],
+          "as": ["total_sales", "count", "avg_sales"]
+        }
+      ]
+    }
+  ],
+
+  "signals": [
+    {
+      "name": "tooltip",
+      "value": {},
+      "on": [
+        {"events": "rect:mouseover", "update": "datum"},
+        {"events": "rect:mouseout", "update": "{}"}
+      ]
+    }
+  ],
+
+  "scales": [
+    {
+      "name": "xscale",
+      "type": "band",
+      "domain": {"data": "table", "field": "category"},
+      "range": "width",
+      "padding": 0.05,
+      "round": true
+    },
+    {
+      "name": "yscale",
+      "domain": {"data": "table", "field": "total_sales"},
+      "nice": true,
+      "range": "height"
+    },
+    {
+      "name": "color",
+      "type": "ordinal",
+      "domain": {"data": "table", "field": "category"},
+      "range": {"scheme": "category20"}
+    }
+  ],
+
+  "axes": [
+    {
+      "orient": "bottom",
+      "scale": "xscale",
+      "title": "Category",
+      "labelAngle": -45,
+      "labelAlign": "right"
+    },
+    {
+      "orient": "left",
+      "scale": "yscale",
+      "title": "Total Sales",
+      "format": "~s"
+    }
+  ],
+
+  "marks": [
+    {
+      "type": "rect",
+      "from": {"data": "table"},
+      "encode": {
+        "enter": {
+          "x": {"scale": "xscale", "field": "category"},
+          "width": {"scale": "xscale", "band": 1},
+          "y": {"scale": "yscale", "field": "total_sales"},
+          "y2": {"scale": "yscale", "value": 0}
+        },
+        "update": {
+          "fill": {"scale": "color", "field": "category"},
+          "fillOpacity": {"value": 0.8}
+        },
+        "hover": {
+          "fillOpacity": {"value": 1}
+        }
+      }
+    },
+    {
+      "type": "text",
+      "encode": {
+        "enter": {
+          "align": {"value": "center"},
+          "baseline": {"value": "bottom"},
+          "fill": {"value": "#333"}
+        },
+        "update": {
+          "x": {"scale": "xscale", "signal": "tooltip.category", "band": 0.5},
+          "y": {"scale": "yscale", "signal": "tooltip.total_sales", "offset": -2},
+          "text": {"signal": "tooltip.category ? format(tooltip.total_sales, '~s') + ' (' + tooltip.count + ' items)' : ''"},
+          "fillOpacity": [
+            {"test": "datum === tooltip", "value": 0},
+            {"value": 1}
+          ]
+        }
+      }
+    }
+  ],
+
+  "title": {
+    "text": "Sales by Category (Neutrino-Accelerated)",
+    "subtitle": "Aggregation powered by columnar storage and SIMD",
+    "anchor": "start",
+    "fontSize": 18,
+    "subtitleFontSize": 12,
+    "subtitleColor": "#666"
+  }
+}
+

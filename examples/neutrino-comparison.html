@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vega vs Vega-Neutrino Performance Comparison</title>
+  <script src="https://cdn.jsdelivr.net/npm/vega@6"></script>
+  <script src="../packages/vega-neutrino/build/vega-neutrino.js"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    h1 {
+      color: #333;
+      text-align: center;
+      border-bottom: 3px solid #4CAF50;
+      padding-bottom: 10px;
+    }
+    .comparison-container {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin: 20px 0;
+    }
+    .panel {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .panel h2 {
+      margin-top: 0;
+      padding-bottom: 10px;
+      border-bottom: 2px solid #ddd;
+    }
+    .panel.standard h2 {
+      color: #666;
+    }
+    .panel.neutrino h2 {
+      color: #667eea;
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin: 15px 0;
+    }
+    .stat-card {
+      padding: 15px;
+      border-radius: 6px;
+      background: #f8f9fa;
+    }
+    .stat-label {
+      font-size: 0.85em;
+      color: #666;
+      margin-bottom: 5px;
+    }
+    .stat-value {
+      font-size: 1.5em;
+      font-weight: bold;
+      color: #333;
+    }
+    .neutrino .stat-card {
+      background: linear-gradient(135deg, #667eea15 0%, #764ba215 100%);
+    }
+    .controls {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      margin: 20px 0;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      text-align: center;
+    }
+    button {
+      background: #4CAF50;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+      margin: 5px;
+      transition: background 0.3s;
+    }
+    button:hover:not(:disabled) {
+      background: #45a049;
+    }
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    .log {
+      background: #2d2d2d;
+      color: #f8f8f2;
+      padding: 15px;
+      border-radius: 6px;
+      font-family: 'Courier New', monospace;
+      font-size: 0.9em;
+      max-height: 200px;
+      overflow-y: auto;
+      margin-top: 10px;
+    }
+    .log-entry {
+      margin: 3px 0;
+      padding: 2px 0;
+    }
+    .log-entry.success { color: #50fa7b; }
+    .log-entry.error { color: #ff5555; }
+    .log-entry.warning { color: #f1fa8c; }
+    .log-entry.info { color: #8be9fd; }
+    .winner {
+      background: linear-gradient(135deg, #50fa7b 0%, #45d068 100%);
+      color: white;
+      padding: 10px;
+      border-radius: 6px;
+      text-align: center;
+      font-weight: bold;
+      margin-top: 10px;
+    }
+    #vis-standard, #vis-neutrino {
+      min-height: 400px;
+      margin: 15px 0;
+    }
+    .speedup {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 20px;
+      border-radius: 8px;
+      text-align: center;
+      margin: 20px 0;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    .speedup h2 {
+      margin: 0 0 10px 0;
+      font-size: 1.2em;
+    }
+    .speedup .value {
+      font-size: 3em;
+      font-weight: bold;
+      margin: 10px 0;
+    }
+  </style>
+</head>
+<body>
+  <h1>⚡ Vega vs Vega-Neutrino Performance Comparison</h1>
+  
+  <div class="controls">
+    <h3>Generate Test Data</h3>
+    <p style="color: #666; margin: 10px 0;">Tests run sequentially to avoid interference</p>
+    <p style="color: #666; margin: 10px 0; font-size: 0.9em;">
+      💡 To see memory usage, open Chrome with: <code>chrome --enable-precise-memory-info</code>
+    </p>
+    <p style="color: #e67e22; margin: 10px 0; font-size: 0.9em; background: #fef5e7; padding: 10px; border-radius: 4px;">
+      ⚠️ <strong>What's being tested:</strong> This demo compares JavaScript aggregation (Standard) vs WASM aggregation (Neutrino).
+      Both views load the same JavaScript data, so memory usage will be similar. The main difference is aggregation performance.
+      For true memory savings, Neutrino should load data from .ntro files (columnar format).
+    </p>
+    <button id="generate100k">100K Rows</button>
+    <button id="generate1m">1M Rows</button>
+    <button id="generate10m">10M Rows</button>
+    <button id="clearData">Clear Data</button>
+  </div>
+
+  <div class="speedup" id="speedup" style="display: none;">
+    <h2>Performance Improvement</h2>
+    <div class="value" id="speedupValue">-</div>
+    <div id="speedupText">Neutrino is faster!</div>
+  </div>
+
+  <div class="comparison-container">
+    <div class="panel standard">
+      <h2>🐢 Standard Vega</h2>
+      <div class="stats">
+        <div class="stat-card">
+          <div class="stat-label">Rows</div>
+          <div class="stat-value" id="rows-standard">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Load Time</div>
+          <div class="stat-value" id="loadTime-standard">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Render Time</div>
+          <div class="stat-value" id="renderTime-standard">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Total Time</div>
+          <div class="stat-value" id="totalTime-standard">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Memory (MB)</div>
+          <div class="stat-value" id="memory-standard">-</div>
+        </div>
+      </div>
+      <div id="vis-standard"></div>
+      <div class="log" id="log-standard"></div>
+    </div>
+
+    <div class="panel neutrino">
+      <h2>⚡ Vega + Neutrino</h2>
+      <div class="stats">
+        <div class="stat-card">
+          <div class="stat-label">Rows</div>
+          <div class="stat-value" id="rows-neutrino">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Load Time</div>
+          <div class="stat-value" id="loadTime-neutrino">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Render Time</div>
+          <div class="stat-value" id="renderTime-neutrino">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Total Time</div>
+          <div class="stat-value" id="totalTime-neutrino">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Memory (MB)</div>
+          <div class="stat-value" id="memory-neutrino">-</div>
+        </div>
+      </div>
+      <div id="vis-neutrino"></div>
+      <div class="log" id="log-neutrino"></div>
+    </div>
+  </div>
+
+  <script type="module">
+    // Data generator
+    const categories = ['Electronics', 'Clothing', 'Food', 'Books', 'Toys', 'Sports', 'Home', 'Garden'];
+    const regions = ['North', 'South', 'East', 'West', 'Central'];
+
+    function generateData(rowCount) {
+      const startTime = performance.now();
+      const data = [];
+
+      // For large datasets, show progress
+      const showProgress = rowCount >= 1000000;
+      const progressInterval = Math.floor(rowCount / 10);
+
+      for (let i = 0; i < rowCount; i++) {
+        data.push({
+          id: i,
+          category: categories[Math.floor(Math.random() * categories.length)],
+          region: regions[Math.floor(Math.random() * regions.length)],
+          date: new Date(2023, Math.floor(Math.random() * 12), Math.floor(Math.random() * 28) + 1).toISOString(),
+          sales: Math.floor(Math.random() * 10000) + 100,
+          quantity: Math.floor(Math.random() * 100) + 1,
+          price: Math.floor(Math.random() * 500) + 10,
+          discount: Math.random() * 0.3,
+          profit: Math.floor(Math.random() * 5000) - 1000
+        });
+
+        // Show progress for large datasets
+        if (showProgress && i > 0 && i % progressInterval === 0) {
+          const percent = Math.round((i / rowCount) * 100);
+          log(`  Progress: ${percent}% (${i.toLocaleString()} / ${rowCount.toLocaleString()} rows)`, 'info', 'both');
+        }
+      }
+
+      const genTime = Math.round(performance.now() - startTime);
+      return { data, genTime };
+    }
+
+    // Vega spec (same for both views)
+    const createSpec = () => ({
+      "$schema": "https://vega.github.io/schema/vega/v5.json",
+      "width": 500,
+      "height": 350,
+      "padding": 5,
+
+      "data": [
+        {
+          "name": "sales",
+          "values": []
+        },
+        {
+          "name": "aggregated",
+          "source": "sales",
+          "transform": [
+            {
+              "type": "aggregate",
+              "groupby": ["category"],
+              "ops": ["sum", "count", "mean"],
+              "fields": ["sales", null, "sales"],
+              "as": ["total_sales", "count", "avg_sales"]
+            }
+          ]
+        }
+      ],
+
+      "scales": [
+        {
+          "name": "xscale",
+          "type": "band",
+          "domain": {"data": "aggregated", "field": "category"},
+          "range": "width",
+          "padding": 0.1
+        },
+        {
+          "name": "yscale",
+          "type": "linear",
+          "domain": {"data": "aggregated", "field": "total_sales"},
+          "range": "height",
+          "nice": true,
+          "zero": true
+        },
+        {
+          "name": "color",
+          "type": "ordinal",
+          "domain": {"data": "aggregated", "field": "category"},
+          "range": {"scheme": "category10"}
+        }
+      ],
+
+      "axes": [
+        {"orient": "bottom", "scale": "xscale", "labelAngle": -45, "labelAlign": "right"},
+        {"orient": "left", "scale": "yscale", "title": "Total Sales", "format": "~s"}
+      ],
+
+      "marks": [
+        {
+          "type": "rect",
+          "from": {"data": "aggregated"},
+          "encode": {
+            "enter": {
+              "x": {"scale": "xscale", "field": "category"},
+              "width": {"scale": "xscale", "band": 1},
+              "y": {"scale": "yscale", "field": "total_sales"},
+              "y2": {"scale": "yscale", "value": 0},
+              "fill": {"scale": "color", "field": "category"}
+            },
+            "update": {
+              "fillOpacity": {"value": 0.8}
+            },
+            "hover": {
+              "fillOpacity": {"value": 1}
+            }
+          }
+        }
+      ]
+    });
+
+
+
+    // Logging
+    function log(message, type = 'info', panel = 'both') {
+      const timestamp = new Date().toLocaleTimeString();
+      const entry = `<div class="log-entry ${type}">[${timestamp}] ${message}</div>`;
+
+      if (panel === 'both' || panel === 'standard') {
+        document.getElementById('log-standard').innerHTML += entry;
+        document.getElementById('log-standard').scrollTop = document.getElementById('log-standard').scrollHeight;
+      }
+      if (panel === 'both' || panel === 'neutrino') {
+        document.getElementById('log-neutrino').innerHTML += entry;
+        document.getElementById('log-neutrino').scrollTop = document.getElementById('log-neutrino').scrollHeight;
+      }
+    }
+
+    // Update stats
+    function updateStats(panel, stats) {
+      for (const [key, value] of Object.entries(stats)) {
+        const el = document.getElementById(`${key}-${panel}`);
+        if (el) {
+          if (key.includes('Time')) {
+            el.textContent = value ? `${value}ms` : '-';
+          } else {
+            el.textContent = value.toLocaleString();
+          }
+        }
+      }
+    }
+
+    // Views
+    let viewStandard = null;
+    let viewNeutrino = null;
+    let currentData = null;
+
+    // Initialize standard Vega view
+    async function initStandard() {
+      const spec = createSpec();
+      const runtime = vega.parse(spec);
+      viewStandard = new vega.View(runtime)
+        .renderer('canvas')
+        .initialize('#vis-standard')
+        .hover();
+
+      log('Standard Vega initialized', 'success', 'standard');
+    }
+
+    // Initialize Neutrino view
+    async function initNeutrino() {
+      log('Initializing Neutrino WASM...', 'info', 'neutrino');
+
+      try {
+        const spec = createSpec();
+        const runtime = vega.parse(spec);
+
+        viewNeutrino = new vega.View(runtime)
+          .renderer('canvas')
+          .initialize('#vis-neutrino')
+          .hover();
+
+        // Enable Neutrino transforms
+        await vegaNeutrino.enableNeutrino(viewNeutrino, {
+          wasmUrl: '../packages/vega-neutrino/src/wasm/neutrino_bg.wasm',
+          workerCount: navigator.hardwareConcurrency || 4,
+          threshold: 1000
+        });
+
+        // Verify it actually initialized
+        if (!vegaNeutrino.isNeutrinoEnabled(viewNeutrino)) {
+          throw new Error('Neutrino failed to enable - check console for details');
+        }
+
+        log('✓ Neutrino enabled and verified!', 'success', 'neutrino');
+      } catch (error) {
+        log(`✗ CRITICAL ERROR: ${error.message}`, 'error', 'neutrino');
+        log('✗ Neutrino is NOT working - results will be invalid!', 'error', 'neutrino');
+        log('', 'error', 'neutrino');
+        log('To fix: Run a local web server instead of opening file:// directly', 'warning', 'neutrino');
+        log('Example: python3 -m http.server 8000', 'warning', 'neutrino');
+        log('Then open: http://localhost:8000/examples/neutrino-comparison.html', 'warning', 'neutrino');
+
+        // Disable all test buttons
+        document.querySelectorAll('button').forEach(b => {
+          if (b.id !== 'clearData') {
+            b.disabled = true;
+            b.title = 'Neutrino failed to initialize - see logs';
+          }
+        });
+
+        throw error;
+      }
+    }
+
+    // Get memory usage
+    function getMemoryUsage() {
+      if (performance.memory) {
+        const used = performance.memory.usedJSHeapSize;
+        const total = performance.memory.totalJSHeapSize;
+        return {
+          used: Math.round(used / 1024 / 1024),
+          total: Math.round(total / 1024 / 1024),
+          usedBytes: used
+        };
+      }
+      return null;
+    }
+
+    // Run standard Vega
+    async function runStandard(data) {
+      log(`Loading ${data.length.toLocaleString()} rows...`, 'info', 'standard');
+
+      // Force GC if available
+      if (window.gc) {
+        window.gc();
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+
+      const memoryBefore = getMemoryUsage();
+      log(`📊 Memory before: ${memoryBefore ? memoryBefore.used + 'MB' : 'N/A'}`, 'info', 'standard');
+
+      const loadStart = performance.now();
+
+      const changeset = vega.changeset().remove(() => true).insert(data);
+      viewStandard.change('sales', changeset);
+
+      const loadTime = Math.round(performance.now() - loadStart);
+
+      log('Running dataflow...', 'info', 'standard');
+      const renderStart = performance.now();
+      await viewStandard.runAsync();
+      const renderTime = Math.round(performance.now() - renderStart);
+
+      const totalTime = loadTime + renderTime;
+
+      // Wait a bit for memory to stabilize
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      const memoryAfter = getMemoryUsage();
+      log(`📊 Memory after: ${memoryAfter ? memoryAfter.used + 'MB' : 'N/A'}`, 'info', 'standard');
+
+      const memoryUsed = memoryAfter && memoryBefore ? memoryAfter.usedBytes - memoryBefore.usedBytes : null;
+      const memoryUsedMB = memoryUsed !== null ? Math.round(memoryUsed / 1024 / 1024) : null;
+
+      updateStats('standard', {
+        rows: data.length,
+        loadTime,
+        renderTime,
+        totalTime,
+        memory: memoryUsedMB !== null ? memoryUsedMB : 'N/A'
+      });
+
+      log(`✓ Complete in ${totalTime}ms (load: ${loadTime}ms, render: ${renderTime}ms)`, 'success', 'standard');
+      if (memoryUsedMB !== null) {
+        log(`📊 Memory delta: ${memoryUsedMB} MB`, 'info', 'standard');
+      }
+
+      return { loadTime, renderTime, totalTime, memoryUsed: memoryUsedMB };
+    }
+
+    // Run Neutrino
+    async function runNeutrino(data) {
+      log(`Loading ${data.length.toLocaleString()} rows...`, 'info', 'neutrino');
+
+      // Force GC if available
+      if (window.gc) {
+        window.gc();
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+
+      const memoryBefore = getMemoryUsage();
+      log(`📊 Memory before: ${memoryBefore ? memoryBefore.used + 'MB' : 'N/A'}`, 'info', 'neutrino');
+
+      const loadStart = performance.now();
+
+      const changeset = vega.changeset().remove(() => true).insert(data);
+      viewNeutrino.change('sales', changeset);
+
+      const loadTime = Math.round(performance.now() - loadStart);
+
+      log('Running dataflow with Neutrino...', 'info', 'neutrino');
+      const renderStart = performance.now();
+      await viewNeutrino.runAsync();
+      const renderTime = Math.round(performance.now() - renderStart);
+
+      const totalTime = loadTime + renderTime;
+
+      // Wait a bit for memory to stabilize
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      const memoryAfter = getMemoryUsage();
+      log(`📊 Memory after: ${memoryAfter ? memoryAfter.used + 'MB' : 'N/A'}`, 'info', 'neutrino');
+
+      const memoryUsed = memoryAfter && memoryBefore ? memoryAfter.usedBytes - memoryBefore.usedBytes : null;
+      const memoryUsedMB = memoryUsed !== null ? Math.round(memoryUsed / 1024 / 1024) : null;
+
+      updateStats('neutrino', {
+        rows: data.length,
+        loadTime,
+        renderTime,
+        totalTime,
+        memory: memoryUsedMB !== null ? memoryUsedMB : 'N/A'
+      });
+
+      log(`✓ Complete in ${totalTime}ms (load: ${loadTime}ms, render: ${renderTime}ms)`, 'success', 'neutrino');
+      if (memoryUsedMB !== null) {
+        log(`📊 Memory delta: ${memoryUsedMB} MB`, 'info', 'neutrino');
+      }
+
+      return { loadTime, renderTime, totalTime, memoryUsed: memoryUsedMB };
+    }
+
+    // Compare results
+    function showComparison(standardResult, neutrinoResult) {
+      const speedup = (standardResult.totalTime / neutrinoResult.totalTime).toFixed(2);
+      const speedupEl = document.getElementById('speedup');
+      const speedupValue = document.getElementById('speedupValue');
+      const speedupText = document.getElementById('speedupText');
+
+      speedupEl.style.display = 'block';
+
+      // Show both time and memory comparison
+      let comparisonText = '';
+
+      if (speedup > 1) {
+        comparisonText = `Neutrino is ${speedup}x faster! 🚀`;
+      } else if (speedup < 1) {
+        const slowdown = (neutrinoResult.totalTime / standardResult.totalTime).toFixed(2);
+        comparisonText = `Standard Vega is ${slowdown}x faster`;
+      } else {
+        comparisonText = 'Same performance';
+      }
+
+      // Add memory comparison if available
+      if (standardResult.memoryUsed !== null && neutrinoResult.memoryUsed !== null) {
+        const memoryRatio = (standardResult.memoryUsed / neutrinoResult.memoryUsed).toFixed(2);
+        if (memoryRatio > 1) {
+          comparisonText += `\nNeutrino uses ${memoryRatio}x less memory! 💾`;
+        } else if (memoryRatio < 1) {
+          const memoryIncrease = (neutrinoResult.memoryUsed / standardResult.memoryUsed).toFixed(2);
+          comparisonText += `\nNeutrino uses ${memoryIncrease}x more memory`;
+        }
+      }
+
+      speedupValue.textContent = `${speedup}x`;
+      speedupText.textContent = comparisonText;
+    }
+
+    // Run comparison (sequential to avoid interference)
+    async function runComparison(rowCount) {
+      const buttons = document.querySelectorAll('button');
+      buttons.forEach(b => b.disabled = true);
+
+      try {
+        log('='.repeat(50), 'info', 'both');
+        log(`Starting comparison with ${rowCount.toLocaleString()} rows`, 'info', 'both');
+        log('Tests will run SEQUENTIALLY to avoid interference', 'info', 'both');
+        log('='.repeat(50), 'info', 'both');
+
+        // Generate data
+        log('Generating data...', 'info', 'both');
+        const { data, genTime } = generateData(rowCount);
+        currentData = data;
+        log(`✓ Generated ${data.length.toLocaleString()} rows in ${genTime}ms`, 'success', 'both');
+
+        // Small delay before starting
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // Run standard Vega FIRST
+        log('', 'info', 'both');
+        log('>>> Running Standard Vega...', 'info', 'standard');
+        const standardResult = await runStandard(data);
+
+        // Delay between tests to let browser settle
+        log('Waiting before next test...', 'info', 'both');
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        // Run Neutrino SECOND
+        log('', 'info', 'both');
+        log('>>> Running Vega-Neutrino...', 'info', 'neutrino');
+        const neutrinoResult = await runNeutrino(data);
+
+        // Show comparison
+        log('', 'info', 'both');
+        showComparison(standardResult, neutrinoResult);
+
+        log('='.repeat(50), 'info', 'both');
+        log('✓ Comparison complete!', 'success', 'both');
+        log(`Standard: ${standardResult.totalTime}ms | Neutrino: ${neutrinoResult.totalTime}ms`, 'info', 'both');
+        if (standardResult.memoryUsed !== null && neutrinoResult.memoryUsed !== null) {
+          log(`Memory: Standard ${standardResult.memoryUsed}MB | Neutrino ${neutrinoResult.memoryUsed}MB`, 'info', 'both');
+        }
+        log('='.repeat(50), 'info', 'both');
+
+      } catch (error) {
+        log(`✗ Error: ${error.message}`, 'error', 'both');
+        console.error(error);
+      } finally {
+        buttons.forEach(b => b.disabled = false);
+      }
+    }
+
+    // Event handlers
+    document.getElementById('generate100k').addEventListener('click', () => runComparison(100000));
+    document.getElementById('generate1m').addEventListener('click', () => runComparison(1000000));
+    document.getElementById('generate10m').addEventListener('click', () => {
+      if (confirm('⚠️ Generating 10M rows will take 30-60 seconds and may freeze the browser temporarily. Continue?')) {
+        runComparison(10000000);
+      }
+    });
+
+    document.getElementById('clearData').addEventListener('click', () => {
+      if (viewStandard) {
+        viewStandard.change('sales', vega.changeset().remove(() => true));
+        viewStandard.runAsync();
+      }
+      if (viewNeutrino) {
+        viewNeutrino.change('sales', vega.changeset().remove(() => true));
+        viewNeutrino.runAsync();
+      }
+
+      updateStats('standard', { rows: 0, loadTime: 0, renderTime: 0, totalTime: 0 });
+      updateStats('neutrino', { rows: 0, loadTime: 0, renderTime: 0, totalTime: 0 });
+
+      document.getElementById('speedup').style.display = 'none';
+
+      log('Data cleared', 'info', 'both');
+    });
+
+    // Initialize on load
+    window.addEventListener('load', async () => {
+      log('Initializing comparison demo...', 'info', 'both');
+
+      try {
+        await initStandard();
+        await initNeutrino();
+
+        log('='.repeat(50), 'info', 'both');
+        log('Ready! Click a button to start comparison', 'success', 'both');
+        log('='.repeat(50), 'info', 'both');
+      } catch (error) {
+        log(`Initialization failed: ${error.message}`, 'error', 'both');
+        console.error(error);
+      }
+    });
+  </script>
+</body>
+</html>
+

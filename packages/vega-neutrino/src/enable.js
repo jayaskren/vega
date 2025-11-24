@@ -31,7 +31,18 @@ export async function enableNeutrino(view, options = {}) {
 
   // Register Neutrino transforms
   if (runtime.transforms) {
+    // Add Neutrino transforms to the registry
     Object.assign(runtime.transforms, transforms);
+
+    // Replace standard transforms with Neutrino versions
+    if (options.replaceTransforms !== false) {
+      runtime.transforms.aggregate = transforms.NeutrinoAggregate;
+      runtime.transforms.filter = transforms.NeutrinoFilter;
+      runtime.transforms.window = transforms.NeutrinoWindow;
+      runtime.transforms.collect = transforms.NeutrinoCollect;
+
+      console.log('✓ Neutrino transforms registered and replacing standard transforms');
+    }
   }
 
   // Store options for later use

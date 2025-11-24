@@ -41,49 +41,95 @@ inherits(NeutrinoAggregate, Transform, {
 
     // Check if source is Neutrino data
     const source = this._getSourceDataSource(pulse);
-    if (!source || !source.getTablePtr) {
-      // Fallback to standard aggregate
-      return this._fallbackAggregate(_, pulse, out);
+    let tablePtr = null;
+    let tempTable = null;
+
+    if (source && source.getTablePtr) {
+      // Use existing Neutrino table
+      tablePtr = source.getTablePtr();
+    } else {
+      // Try to convert JavaScript data to Neutrino table
+      try {
+        const data = [];
+        pulse.visit(pulse.SOURCE, tuple => {
+          // Convert tuple to plain object
+          const obj = {};
+          for (const key in tuple) {
+            if (key !== '_id' && key !== '_prev') {
+              obj[key] = tuple[key];
+            }
+          }
+          data.push(obj);
+        });
+
+        if (data.length > 0) {
+          console.log(`🚀 NeutrinoAggregate: Converting ${data.length} rows to WasmTable...`);
+          const startTime = performance.now();
+
+          // Convert to WasmTable
+          tempTable = bindings.loadJSON(null, data);
+          tablePtr = tempTable;
+
+          const conversionTime = Math.round(performance.now() - startTime);
+          console.log(`✓ Conversion complete in ${conversionTime}ms`);
+        } else {
+          // No data, return empty result
+          return this._fallbackAggregate(_, pulse, out);
+        }
+      } catch (error) {
+        console.error('❌ NeutrinoAggregate: failed to convert data to WasmTable:', error);
+        return this._fallbackAggregate(_, pulse, out);
+      }
     }
 
-    this._source = source;
+    try {
+      // Build aggregation config for WASM
+      const config = this._buildConfig(_);
+      console.log('🔧 Aggregation config:', config);
 
-    // Build aggregation config for WASM
-    const config = this._buildConfig(_);
+      // Execute aggregation in WASM
+      console.log('⚡ Running WASM aggregation...');
+      const aggStartTime = performance.now();
+      const results = bindings.aggregate(tablePtr, config);
+      const aggTime = Math.round(performance.now() - aggStartTime);
+      console.log(`✓ WASM aggregation complete in ${aggTime}ms, ${results.length} groups`);
 
-    // Execute aggregation in WASM
-    const tablePtr = source.getTablePtr();
-    const results = bindings.aggregate(tablePtr, config);
+      // Convert results to Vega tuples
+      const prevCells = this._cells;
+      this._cells = new Map();
 
-    // Convert results to Vega tuples
-    const prevCells = this._cells;
-    this._cells = new Map();
+      for (const row of results) {
+        const key = this._groupKey(row, _.groupby);
 
-    for (const row of results) {
-      const key = this._groupKey(row, _.groupby);
+        let tuple = prevCells.get(key);
+        if (tuple) {
+          // Update existing tuple
+          Object.assign(tuple, row);
+          out.mod.push(tuple);
+          prevCells.delete(key);
+        } else {
+          // Create new tuple
+          tuple = ingest(row);
+          out.add.push(tuple);
+        }
 
-      let tuple = prevCells.get(key);
-      if (tuple) {
-        // Update existing tuple
-        Object.assign(tuple, row);
-        out.mod.push(tuple);
-        prevCells.delete(key);
-      } else {
-        // Create new tuple
-        tuple = ingest(row);
-        out.add.push(tuple);
+        this._cells.set(key, tuple);
       }
 
-      this._cells.set(key, tuple);
-    }
+      // Remove tuples for groups no longer present
+      for (const tuple of prevCells.values()) {
+        out.rem.push(tuple);
+      }
 
-    // Remove tuples for groups no longer present
-    for (const tuple of prevCells.values()) {
-      out.rem.push(tuple);
-    }
+      this.value = Array.from(this._cells.values());
 
-    this.value = Array.from(this._cells.values());
-    return out;
+      return out;
+    } finally {
+      // Clean up temporary table
+      if (tempTable) {
+        bindings.freeTable(tempTable);
+      }
+    }
   },
 
   _buildConfig(_) {
