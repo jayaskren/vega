@@ -51,11 +51,14 @@ export function loadCSV(tablePtr, csvData, options = {}) {
   const encoder = new TextEncoder();
   const csvBytes = encoder.encode(csvData);
 
-  // Create schema analyzer
-  const analyzer = wasm.WasmSchemaAnalyzer.new();
+  // Create schema analyzer using factory method
+  const analyzer = wasm.WasmSchemaAnalyzer.fast_preview();
 
   // Analyze CSV to get schema
-  const schemaJson = analyzer.analyze_csv_buffer(csvBytes);
+  const schema = analyzer.analyze_csv_buffer(csvBytes);
+
+  // Convert schema to JSON string if needed
+  const schemaJson = typeof schema === 'string' ? schema : JSON.stringify(schema);
 
   // Create table from CSV with the analyzed schema
   const table = analyzer.create_table_from_csv(csvBytes, schemaJson);
