@@ -67,12 +67,41 @@ export function loadCSV(tablePtr, csvData, options = {}) {
     userConfig = schema;
   }
 
+  // Valid Neutrino types
+  const validTypes = ['Integer', 'String', 'DateTime', 'Float32', 'Float64'];
+
+  // Map common type names to valid Neutrino types
+  const typeMap = {
+    'integer': 'Integer',
+    'int': 'Integer',
+    'number': 'Integer',
+    'string': 'String',
+    'text': 'String',
+    'date': 'DateTime',
+    'datetime': 'DateTime',
+    'float': 'Float64',
+    'float32': 'Float32',
+    'float64': 'Float64',
+    'double': 'Float64'
+  };
+
+  function normalizeType(typeValue) {
+    if (!typeValue) return 'String';
+    // Check if already valid
+    if (validTypes.includes(typeValue)) return typeValue;
+    // Try lowercase mapping
+    const mapped = typeMap[typeValue.toLowerCase()];
+    if (mapped) return mapped;
+    // Default to String
+    return 'String';
+  }
+
   // If the schema has columns array, transform to user config format
   if (userConfig.columns && Array.isArray(userConfig.columns)) {
     userConfig.columns = userConfig.columns.map(col => ({
       ...col,
       // Use inferred_type or detected_type as user_selected_type
-      user_selected_type: col.user_selected_type || col.inferred_type || col.detected_type || col.type || 'String'
+      user_selected_type: normalizeType(col.user_selected_type || col.inferred_type || col.detected_type)
     }));
   }
 
